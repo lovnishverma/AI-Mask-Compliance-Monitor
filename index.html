@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Mask Compliance Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+
+    <style>
+        :root {
+            --col-green: #00ff84;
+            --col-red: #ff4b4b;
+            --col-bg: #0e0e0e;
+            --col-surface: rgba(30, 30, 30, 0.9);
+            --col-text: #ffffff;
+        }
+
+        body {
+            margin: 0;
+            background-color: var(--col-bg);
+            color: var(--col-text);
+            font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            height: 100vh;
+            padding-top: 1.5rem;
+        }
+
+        h2 {
+            font-weight: 700;
+            font-size: 2.2rem;
+            margin-bottom: 1rem;
+            letter-spacing: 1px;
+        }
+
+        #alert-banner {
+            display: none;
+            width: 100%;
+            text-align: center;
+            background-color: var(--col-red);
+            color: white;
+            font-weight: 700;
+            font-size: 1.1rem;
+            padding: 10px 0;
+            animation: flash 1s infinite alternate;
+        }
+
+        @keyframes flash {
+            from {
+                opacity: 1;
+            }
+
+            to {
+                opacity: 0.4;
+            }
+        }
+
+        #stats-container {
+            display: flex;
+            gap: 1.5rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .stat-card {
+            background-color: var(--col-surface);
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            text-align: center;
+            min-width: 150px;
+            backdrop-filter: blur(8px);
+            transition: 0.3s;
+        }
+
+        .stat-card h3 {
+            margin: 0 0 0.5rem 0;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-card-number {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        #mask-count {
+            color: var(--col-green);
+        }
+
+        #nomask-count {
+            color: var(--col-red);
+        }
+
+        #container {
+            position: relative;
+            display: inline-block;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+        }
+
+        #video,
+        #canvas {
+            width: 640px;
+            height: 480px;
+            border-radius: 12px;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .label {
+            position: absolute;
+            padding: 5px 8px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            color: #fff;
+            text-shadow: 0 0 5px rgba(0, 0, 0, 0.7);
+        }
+
+        #performance {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>AI Mask Compliance Monitor</h2>
+    <div id="alert-banner">⚠️ MASK VIOLATION DETECTED!</div>
+
+    <div id="stats-container">
+        <div class="stat-card">
+            <h3>With Mask</h3>
+            <div id="mask-count" class="stat-card-number">0</div>
+        </div>
+        <div class="stat-card" id="nomask-card">
+            <h3>No Mask</h3>
+            <div id="nomask-count" class="stat-card-number">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>Total Detections</h3>
+            <div id="total-count" class="stat-card-number">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>FPS</h3>
+            <div id="fps" class="stat-card-number">0</div>
+        </div>
+    </div>
+
+    <div id="container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+    </div>
+
+    <div id="performance">Session running...</div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const maskEl = document.getElementById('mask-count');
+        const noMaskEl = document.getElementById('nomask-count');
+        const totalEl = document.getElementById('total-count');
+        const fpsEl = document.getElementById('fps');
+        const alertBanner = document.getElementById('alert-banner');
+
+        let faceModel, maskModel;
+        let audioContext;
+        let lastAlertTime = 0;
+        const alertThrottle = 2000;
+        let lastFrameTime = performance.now();
+
+        let totalMasks = 0, totalNoMasks = 0, totalDetections = 0;
+
+        function playAlert() {
+            if (!audioContext) return;
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+            gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.2);
+        }
+
+        async function init() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            await new Promise(r => video.onloadeddata = r);
+
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            [faceModel, maskModel] = await Promise.all([
+                blazeface.load(),
+                tf.loadGraphModel('model_web/model.json')
+            ]);
+
+            detectFaces();
+        }
+
+        async function detectFaces() {
+            const startTime = performance.now();
+            ctx.drawImage(video, 0, 0, 640, 480);
+            const faces = await faceModel.estimateFaces(video, false);
+            document.querySelectorAll('.label').forEach(el => el.remove());
+
+            let maskCount = 0, noMaskCount = 0;
+            for (const face of faces) {
+                const [x1, y1] = face.topLeft;
+                const [x2, y2] = face.bottomRight;
+                const faceTensor = tf.tidy(() => {
+                    const img = tf.browser.fromPixels(video);
+                    return tf.image.cropAndResize(
+                        img.expandDims(0).toFloat(),
+                        [[y1 / 480, x1 / 640, y2 / 480, x2 / 640]],
+                        [0], [128, 128]
+                    ).div(255.0);
+                });
+
+                const [withMask, noMask] = await maskModel.predict(faceTensor).data();
+                const label = withMask > noMask ? 'WITH MASK' : 'NO MASK';
+                const color = withMask > noMask ? 'var(--col-green)' : 'var(--col-red)';
+                const confidence = Math.max(withMask, noMask);
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 4;
+                ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+                const labelEl = document.createElement('div');
+                labelEl.className = 'label';
+                labelEl.style.left = x1 + 'px';
+                labelEl.style.top = (y1 > 25 ? y1 - 25 : y1 + 5) + 'px';
+                labelEl.style.background = color;
+                labelEl.textContent = `${label} ${(confidence * 100).toFixed(0)}%`;
+                document.getElementById('container').appendChild(labelEl);
+
+                if (label === 'WITH MASK') maskCount++;
+                else noMaskCount++;
+
+                tf.dispose(faceTensor);
+            }
+
+            maskEl.textContent = maskCount;
+            noMaskEl.textContent = noMaskCount;
+            totalMasks += maskCount;
+            totalNoMasks += noMaskCount;
+            totalDetections += faces.length;
+            totalEl.textContent = totalDetections;
+
+            if (noMaskCount > 0) {
+                const now = Date.now();
+                if (now - lastAlertTime > alertThrottle) {
+                    playAlert();
+                    alertBanner.style.display = "block";
+                    lastAlertTime = now;
+                    setTimeout(() => alertBanner.style.display = "none", 1500);
+                }
+            }
+
+            const elapsed = performance.now() - startTime;
+            const fps = (1000 / (performance.now() - lastFrameTime)).toFixed(1);
+            lastFrameTime = performance.now();
+            fpsEl.textContent = fps;
+
+            requestAnimationFrame(detectFaces);
+        }
+
+        init().catch(console.error);
+    </script>
+</body>
+
+</html>
