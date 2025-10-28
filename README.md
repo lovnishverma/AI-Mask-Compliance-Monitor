@@ -1,4 +1,4 @@
-# 🤖 AI Mask Compliance Monitor
+# AI Mask Compliance Monitor 🤖 
 
 A real-time **AI-powered face mask detection system** built with **TensorFlow.js** and **BlazeFace**, running entirely in the browser — no server required!  
 It detects faces via webcam feed and classifies whether a person is **wearing a mask** or **not**, with live dashboard stats, alerts, and sounds.
