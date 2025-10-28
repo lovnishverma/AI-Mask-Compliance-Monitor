@@ -1,22 +1,3 @@
-Perfect 💪 — here’s a **professional `README.md`** for your project
-**AI Mask Compliance Monitor**, ready to upload on GitHub.
-
-It includes:
-
-* 📌 Project overview
-* ⚙️ Features list
-* 🧠 Model training (Colab link)
-* 🌐 Live GitHub Pages demo
-* 🏗️ Setup instructions
-* 🧩 Tech stack
-* 📷 Screenshot placeholder
-* 👨‍💻 Author info
-
----
-
-### ✅ **README.md**
-
-````markdown
 # 🤖 AI Mask Compliance Monitor
 
 A real-time **AI-powered face mask detection system** built with **TensorFlow.js** and **BlazeFace**, running entirely in the browser — no server required!  
