@@ -108,6 +108,7 @@
             box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
             aspect-ratio: 4 / 3;
             background: #000;
+            margin-bottom: 0.75rem;
         }
 
         #video, #canvas {
@@ -135,16 +136,41 @@
             pointer-events: none;
         }
 
+        #controls {
+            display: flex;
+            gap: 0.75rem;
+            width: 100%;
+            max-width: 600px;
+            justify-content: center;
+            margin-bottom: 0.5rem;
+        }
+
+        button {
+            background-color: var(--col-surface);
+            color: var(--col-text);
+            border: none;
+            padding: 0.75rem 1.2rem;
+            border-radius: var(--radius);
+            font-size: clamp(0.85rem, 3vw, 1rem);
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            backdrop-filter: blur(8px);
+            transition: all 0.2s;
+        }
+
+        button:active {
+            transform: scale(0.95);
+            background-color: rgba(50, 50, 50, 0.9);
+        }
+
         #performance {
-            margin-top: 0.75rem;
+            margin-top: 0.5rem;
             font-size: clamp(0.75rem, 2.5vw, 0.9rem);
             opacity: 0.7;
             text-align: center;
-        }
-
-        /* Improve mobile tap feedback */
-        button, .stat-card {
-            -webkit-tap-highlight-color: transparent;
         }
     </style>
 </head>
@@ -177,6 +203,12 @@
         <canvas id="canvas"></canvas>
     </div>
 
+    <div id="controls">
+        <button id="flip-camera">
+            <span id="camera-icon">Back Camera</span>
+        </button>
+    </div>
+
     <div id="performance">Initializing camera...</div>
 
     <script>
@@ -189,9 +221,13 @@
         const fpsEl = document.getElementById('fps');
         const alertBanner = document.getElementById('alert-banner');
         const container = document.getElementById('container');
+        const flipBtn = document.getElementById('flip-camera');
+        const cameraIcon = document.getElementById('camera-icon');
 
         let faceModel, maskModel;
         let audioContext;
+        let currentStream = null;
+        let isFrontCamera = false; // Start with back camera
         let lastAlertTime = 0;
         const alertThrottle = 2000;
         let lastFrameTime = performance.now();
@@ -206,6 +242,24 @@
 
         window.addEventListener('resize', resizeCanvas);
 
+        // Stop current stream
+        function stopStream() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+                currentStream = null;
+            }
+        }
+
+        // Toggle camera
+        async function flipCamera() {
+            isFrontCamera = !isFrontCamera;
+            cameraIcon.textContent = isFrontCamera ? 'Front Camera' : 'Back Camera';
+            await stopStream();
+            await startCamera();
+        }
+
+        flipBtn.addEventListener('click', flipCamera);
+
         function playAlert() {
             if (!audioContext) return;
             const osc = audioContext.createOscillator();
@@ -219,26 +273,50 @@
             osc.stop(audioContext.currentTime + 0.2);
         }
 
-        async function init() {
+        async function startCamera() {
             try {
-                // Request front camera on mobile
-                const stream = await navigator.mediaDevices.getUserMedia({
+                const constraints = {
                     video: {
-                        facingMode: 'environment', // 'user' for selfie
+                        facingMode: isFrontCamera ? 'user' : 'environment',
                         width: { ideal: 640 },
                         height: { ideal: 480 }
                     }
-                });
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                currentStream = stream;
                 video.srcObject = stream;
-                await new Promise(r => video.onloadedmetadata = r);
 
-                resizeCanvas();
-                video.play();
+                await new Promise(r => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resizeCanvas();
+                        r();
+                    };
+                });
 
+            } catch (err) {
+                console.error("Camera error:", err);
+                document.getElementById('performance').textContent = 
+                    err.name === 'OverconstrainedError' 
+                        ? 'Camera not available. Try the other one.' 
+                        : 'Camera access denied.';
+            }
+        }
+
+        async function init() {
+            try {
+                // Unlock audio on iOS
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 if (audioContext.state === 'suspended') {
-                    const unlock = () => audioContext.resume().then(() => document.removeEventListener('touchstart', unlock));
+                    const unlock = () => {
+                        audioContext.resume().then(() => {
+                            document.removeEventListener('touchstart', unlock);
+                            document.removeEventListener('click', unlock);
+                        });
+                    };
                     document.addEventListener('touchstart', unlock);
+                    document.addEventListener('click', unlock);
                 }
 
                 [faceModel, maskModel] = await Promise.all([
@@ -246,16 +324,17 @@
                     tf.loadGraphModel('model_web/model.json')
                 ]);
 
+                await startCamera();
                 document.getElementById('performance').textContent = 'Running...';
                 detectFaces();
             } catch (err) {
-                document.getElementById('performance').textContent = 'Camera access denied or unavailable.';
+                document.getElementById('performance').textContent = 'Failed to load models or access camera.';
                 console.error(err);
             }
         }
 
         async function detectFaces() {
-            if (video.readyState < 2) {
+            if (!video.videoWidth || video.readyState < 2) {
                 requestAnimationFrame(detectFaces);
                 return;
             }
@@ -343,9 +422,9 @@
             requestAnimationFrame(detectFaces);
         }
 
-        // Start when page loads
+        // Start on load
         window.onload = () => {
-            setTimeout(init, 500); // Allow layout to settle
+            setTimeout(init, 300);
         };
     </script>
 </body>
